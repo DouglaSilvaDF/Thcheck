@@ -1,105 +1,63 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from datetime import datetime
 
-st.set_page_config(page_title="Análise de Propostas - CLT Águas Lindas", layout="wide")
+st.set_page_config(layout="wide")
+st.title("📊 Análise de Produção de Corretores CLT - Águas Lindas")
 
-st.title("🏡 Análise de Pastas - Corretores CLT Águas Lindas")
-
-uploaded_file = st.file_uploader("📤 Envie a planilha CSV", type="csv")
+uploaded_file = st.file_uploader("Faça o upload da planilha (.csv)", type=["csv"])
 
 if uploaded_file:
-    # Lê o CSV com separador ; e encoding latin1 (padrão do Excel BR)
-    df = pd.read_csv(uploaded_file, sep=';', encoding='latin1')
+    try:
+        # Tentativa de leitura com separador automático
+        df = pd.read_csv(uploaded_file, encoding="utf-8", sep=None, engine='python')
+    except Exception as e:
+        st.error("Erro ao ler o arquivo. Verifique se ele está no formato .csv válido.")
+        st.stop()
 
-    # Define colunas de interesse
-    coluna_corretor = df.columns[0]  # Ex: "Corretor"
-    coluna_status = 'Situação'      # Altere se o nome da coluna for diferente
-    coluna_data = df.columns[24]    # Coluna Y (índice 24)
+    # Força as colunas importantes a serem string
+    coluna_corretor = df.columns[0]  # Primeira coluna deve ser os corretores
+    df[coluna_corretor] = df[coluna_corretor].astype(str)
 
-    # Converte datas
-    df[coluna_data] = pd.to_datetime(df[coluna_data], errors='coerce')
-
-    # Filtra somente CLTs (assumindo que nome do corretor contém "- CLT")
+    # Filtra apenas os corretores CLT de Águas Lindas
     df_clt = df[df[coluna_corretor].str.contains('- CLT', case=False, na=False)]
+    df_clt = df_clt[df_clt[coluna_corretor].str.contains('ÁGUAS LINDAS', case=False, na=False)]
 
-    # Lista de status esperados
-    status_list = ['Aprovado', 'Condicionado', 'Reprovado', 'Reserva', 'Pendente Comercial', 'Análise CCA']
+    # Converte coluna de data (coluna Y = index 24)
+    df_clt.iloc[:, 24] = pd.to_datetime(df_clt.iloc[:, 24], errors='coerce')
 
-    # ================= RESULTADO DO DIA =================
-    st.subheader("📅 Resultado do Dia")
-    data_hoje = pd.to_datetime("today").normalize()
-    df_dia = df_clt[df_clt[coluna_data] == data_hoje]
+    # Coluna de status
+    coluna_status = df_clt.columns[df_clt.columns.str.contains("status", case=False)][0]
 
-    def gerar_resumo(df):
-        base = df.groupby(coluna_corretor)[coluna_status].value_counts().unstack(fill_value=0)
-        for status in status_list:
-            if status not in base.columns:
-                base[status] = 0
-        base['Total de Pastas'] = base.sum(axis=1)
-        base['Pastas c/ Resposta'] = base[['Aprovado', 'Condicionado', 'Reprovado', 'Reserva']].sum(axis=1)
-        return base.reset_index()
+    # Data selecionada para filtro
+    data_selecionada = st.date_input("Filtrar por dia:", datetime.today())
+    df_dia = df_clt[df_clt.iloc[:, 24].dt.date == data_selecionada]
 
-    resumo_dia = gerar_resumo(df_dia)
-    st.dataframe(resumo_dia, use_container_width=True)
-
-    # Funil do dia
-    total_dia = resumo_dia['Total de Pastas'].sum()
-    respostas_dia = resumo_dia['Pastas c/ Resposta'].sum()
-    funil_dia = {
-        'Total de Pastas': total_dia,
-        'Respostas': respostas_dia,
-        'Aprovados': resumo_dia['Aprovado'].sum(),
-        'Condicionados': resumo_dia['Condicionado'].sum(),
-        'Reprovados': resumo_dia['Reprovado'].sum(),
-        'Em Análise': resumo_dia['Análise CCA'].sum(),
-        'Pendentes': resumo_dia['Pendente Comercial'].sum(),
-    }
-
-    col1, col2 = st.columns([1, 1])
-    with col2:
-        st.markdown("#### 📊 Funil de Vendas - Diário")
-        funil_dia_df = pd.DataFrame.from_dict(funil_dia, orient='index', columns=['Qtd']).reset_index()
-        fig_dia = px.bar(funil_dia_df, x='Qtd', y='index', orientation='h', text='Qtd',
-                         color='index', color_discrete_sequence=px.colors.qualitative.Pastel)
-        fig_dia.update_layout(yaxis_title="", xaxis_title="", showlegend=False, height=400)
-        st.plotly_chart(fig_dia, use_container_width=True)
-
-    # ================= RESULTADO DO MÊS =================
-    st.subheader("📆 Resultado do Mês")
+    def gerar_resumo(df_base, titulo):
+        resumo = df_base.groupby(coluna_corretor).agg(
+            total_pastas=('Número da Proposta', 'count'),
+            aprovadas=(coluna_status, lambda x: (x.str.lower() == 'aprovado').sum()),
+            reprovadas=(coluna_status, lambda x: (x.str.lower() == 'reprovado').sum()),
+            condicionadas=(coluna_status, lambda x: (x.str.lower() == 'condicionado').sum()),
+            reserva=(coluna_status, lambda x: (x.str.lower() == 'reserva').sum()),
+        )
+        resumo['com_resposta'] = resumo[['aprovadas', 'reprovadas', 'condicionadas', 'reserva']].sum(axis=1)
+        resumo = resumo.reset_index()
+        st.subheader(titulo)
+        st.dataframe(resumo, use_container_width=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        data_ini = st.date_input("📅 De:", pd.to_datetime("today").replace(day=1))
+        gerar_resumo(df_dia, f"📅 Resultado do Dia ({data_selecionada.strftime('%d/%m/%Y')})")
     with col2:
-        data_fim = st.date_input("📅 Até:", pd.to_datetime("today"))
+        gerar_resumo(df_clt, "🗓️ Resultado do Mês (Todos os Dados)")
 
-    df_mes = df_clt[(df_clt[coluna_data] >= pd.to_datetime(data_ini)) & (df_clt[coluna_data] <= pd.to_datetime(data_fim))]
-    resumo_mes = gerar_resumo(df_mes)
-
-    st.dataframe(resumo_mes, use_container_width=True)
-
-    # Funil do mês
-    total_mes = resumo_mes['Total de Pastas'].sum()
-    respostas_mes = resumo_mes['Pastas c/ Resposta'].sum()
-    funil_mes = {
-        'Total de Pastas': total_mes,
-        'Respostas': respostas_mes,
-        'Aprovados': resumo_mes['Aprovado'].sum(),
-        'Condicionados': resumo_mes['Condicionado'].sum(),
-        'Reprovados': resumo_mes['Reprovado'].sum(),
-        'Em Análise': resumo_mes['Análise CCA'].sum(),
-        'Pendentes': resumo_mes['Pendente Comercial'].sum(),
-    }
-
-    col1, col2 = st.columns([1, 1])
-    with col2:
-        st.markdown("#### 📊 Funil de Vendas - Mensal")
-        funil_mes_df = pd.DataFrame.from_dict(funil_mes, orient='index', columns=['Qtd']).reset_index()
-        fig_mes = px.bar(funil_mes_df, x='Qtd', y='index', orientation='h', text='Qtd',
-                         color='index', color_discrete_sequence=px.colors.qualitative.Bold)
-        fig_mes.update_layout(yaxis_title="", xaxis_title="", showlegend=False, height=400)
-        st.plotly_chart(fig_mes, use_container_width=True)
+    st.markdown("---")
+    st.subheader("📌 Desempenho Detalhado por Corretor (Dia Selecionado)")
+    for corretor in df_dia[coluna_corretor].unique():
+        st.markdown(f"**🔹 {corretor}**")
+        st.dataframe(df_dia[df_dia[coluna_corretor] == corretor], use_container_width=True)
 
 else:
-    st.info("📁 Envie a planilha CSV para começar.")
+    st.info("Faça o upload de uma planilha CSV para iniciar.")
