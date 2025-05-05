@@ -1,69 +1,87 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 
-st.set_page_config(page_title="Análise de Pastas por Corretor", layout="wide")
+st.set_page_config(page_title="Análise de Propostas - CLT Águas Lindas", layout="wide")
 
-st.title("📊 Análise de Pastas por Corretor")
+st.title("🏡 Análise de Pastas - Corretores CLT Águas Lindas")
 
-uploaded_file = st.file_uploader("📂 Faça o upload da planilha (.csv)", type="csv")
+uploaded_file = st.file_uploader("📤 Envie a planilha CSV", type="csv")
 
 if uploaded_file:
-    try:
-        # Leitura corrigida com separador ; e encoding latin1
-        df = pd.read_csv(uploaded_file, sep=';', encoding='latin1')
-    except Exception as e:
-        st.error(f"❌ Erro ao ler o arquivo: {e}")
-        st.stop()
+    # Lê o CSV com separador ; e encoding latin1 (padrão do Excel BR)
+    df = pd.read_csv(uploaded_file, sep=';', encoding='latin1')
 
-    # Normaliza os nomes das colunas para facilitar o uso
-    df.columns = [col.strip().lower() for col in df.columns]
+    # Define colunas de interesse
+    coluna_corretor = df.columns[0]  # Ex: "Corretor"
+    coluna_status = 'Situação'      # Altere se o nome da coluna for diferente
+    coluna_data = df.columns[24]    # Coluna Y (índice 24)
 
-    # Detecta colunas principais
-    colunas = df.columns.tolist()
-    st.write("📌 Colunas detectadas:", colunas)
+    # Converte datas
+    df[coluna_data] = pd.to_datetime(df[coluna_data], errors='coerce')
 
-    # Substitua conforme o nome exato na sua planilha
-    corretor_col = st.selectbox("🔍 Escolha a coluna de CORRETOR:", colunas)
-    status_col = st.selectbox("📄 Escolha a coluna de STATUS:", colunas)
-    data_col = st.selectbox("📅 Escolha a coluna de DATA:", colunas)
+    # Filtra somente CLTs (assumindo que nome do corretor contém "- CLT")
+    df_clt = df[df[coluna_corretor].str.contains('- CLT', case=False, na=False)]
 
-    df[data_col] = pd.to_datetime(df[data_col], errors='coerce')
+    # Lista de status esperados
+    status_list = ['Aprovado', 'Condicionado', 'Reprovado', 'Reserva', 'Pendente Comercial', 'Análise CCA']
 
-    # Filtro por dia
-    df['dia'] = df[data_col].dt.day
-    dias_unicos = sorted(df['dia'].dropna().unique())
-    dia_selecionado = st.selectbox("📆 Selecione o DIA para análise:", dias_unicos)
+    # ================= RESULTADO DO DIA =================
+    st.subheader("📅 Resultado do Dia")
+    data_hoje = pd.to_datetime("today").normalize()
+    df_dia = df_clt[df_clt[coluna_data] == data_hoje]
 
-    df_filtrado = df[df['dia'] == dia_selecionado]
+    def gerar_resumo(df):
+        base = df.groupby(coluna_corretor)[coluna_status].value_counts().unstack(fill_value=0)
+        for status in status_list:
+            if status not in base.columns:
+                base[status] = 0
+        base['Total de Pastas'] = base.sum(axis=1)
+        base['Pastas c/ Resposta'] = base[['Aprovado', 'Condicionado', 'Reprovado', 'Reserva']].sum(axis=1)
+        return base.reset_index()
 
-    # Agrupamento por corretor e status
-    resumo = df_filtrado.groupby(corretor_col)[status_col].value_counts().unstack(fill_value=0)
+    resumo_dia = gerar_resumo(df_dia)
+    st.dataframe(resumo_dia, use_container_width=True)
 
-    # Garante que todas as colunas existam
-    status_list = ['aprovado', 'reprovado', 'condicionado', 'reserva']
-    for status in status_list:
-        if status not in resumo.columns:
-            resumo[status] = 0
+    # Funil do dia
+    total_dia = resumo_dia['Total de Pastas'].sum()
+    respostas_dia = resumo_dia['Pastas c/ Resposta'].sum()
+    funil_dia = {
+        'Total de Pastas': total_dia,
+        'Respostas': respostas_dia,
+        'Aprovados': resumo_dia['Aprovado'].sum(),
+        'Condicionados': resumo_dia['Condicionado'].sum(),
+        'Reprovados': resumo_dia['Reprovado'].sum(),
+        'Em Análise': resumo_dia['Análise CCA'].sum(),
+        'Pendentes': resumo_dia['Pendente Comercial'].sum(),
+    }
 
-    resumo['Total'] = resumo.sum(axis=1)
-    resumo['Com Resposta'] = resumo[status_list].sum(axis=1)
+    col1, col2 = st.columns([1, 1])
+    with col2:
+        st.markdown("#### 📊 Funil de Vendas - Diário")
+        funil_dia_df = pd.DataFrame.from_dict(funil_dia, orient='index', columns=['Qtd']).reset_index()
+        fig_dia = px.bar(funil_dia_df, x='Qtd', y='index', orientation='h', text='Qtd',
+                         color='index', color_discrete_sequence=px.colors.qualitative.Pastel)
+        fig_dia.update_layout(yaxis_title="", xaxis_title="", showlegend=False, height=400)
+        st.plotly_chart(fig_dia, use_container_width=True)
 
-    resumo = resumo.reset_index()
+    # ================= RESULTADO DO MÊS =================
+    st.subheader("📆 Resultado do Mês")
 
-    st.subheader("📋 Tabela Resumo por Corretor")
-    st.dataframe(resumo, use_container_width=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        data_ini = st.date_input("📅 De:", pd.to_datetime("today").replace(day=1))
+    with col2:
+        data_fim = st.date_input("📅 Até:", pd.to_datetime("today"))
 
-    st.subheader("📈 Desempenho Detalhado dos Corretores")
-    for _, linha in resumo.iterrows():
-        st.markdown(f"### 👤 Corretor: {linha[corretor_col]}")
-        st.write(f"- Total de Pastas: {linha['Total']}")
-        st.write(f"- Aprovadas: {linha['aprovado']}")
-        st.write(f"- Reprovadas: {linha['reprovado']}")
-        st.write(f"- Condicionadas: {linha['condicionado']}")
-        st.write(f"- Em Reserva: {linha['reserva']}")
-        st.write(f"- Total com Resposta: {linha['Com Resposta']}")
-        st.markdown("---")
+    df_mes = df_clt[(df_clt[coluna_data] >= pd.to_datetime(data_ini)) & (df_clt[coluna_data] <= pd.to_datetime(data_fim))]
+    resumo_mes = gerar_resumo(df_mes)
 
-else:
-    st.info("📁 Envie sua planilha .csv para começar a análise.")
+    st.dataframe(resumo_mes, use_container_width=True)
 
+    # Funil do mês
+    total_mes = resumo_mes['Total de Pastas'].sum()
+    respostas_mes = resumo_mes['Pastas c/ Resposta'].sum()
+    funil_mes = {
+        'Total de Pastas': total_mes,
+        'Respostas': respostas_mes,
