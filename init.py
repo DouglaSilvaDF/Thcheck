@@ -85,3 +85,21 @@ if uploaded_file:
     funil_mes = {
         'Total de Pastas': total_mes,
         'Respostas': respostas_mes,
+        'Aprovados': resumo_mes['Aprovado'].sum(),
+        'Condicionados': resumo_mes['Condicionado'].sum(),
+        'Reprovados': resumo_mes['Reprovado'].sum(),
+        'Em Análise': resumo_mes['Análise CCA'].sum(),
+        'Pendentes': resumo_mes['Pendente Comercial'].sum(),
+    }
+
+    col1, col2 = st.columns([1, 1])
+    with col2:
+        st.markdown("#### 📊 Funil de Vendas - Mensal")
+        funil_mes_df = pd.DataFrame.from_dict(funil_mes, orient='index', columns=['Qtd']).reset_index()
+        fig_mes = px.bar(funil_mes_df, x='Qtd', y='index', orientation='h', text='Qtd',
+                         color='index', color_discrete_sequence=px.colors.qualitative.Bold)
+        fig_mes.update_layout(yaxis_title="", xaxis_title="", showlegend=False, height=400)
+        st.plotly_chart(fig_mes, use_container_width=True)
+
+else:
+    st.info("📁 Envie a planilha CSV para começar.")
